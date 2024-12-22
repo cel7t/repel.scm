@@ -14,7 +14,28 @@
 (define font-size 12)
 (define init-dst 5)
 
+(define fixed-rects '())
+(define points-with-fixed-rects '())
+
 (define max-disp 0)
+
+(define (numerize lst)
+  (match lst
+    [() '()]
+    [(value . rest)
+     `(,(numerize value) . ,(numerize rest))]
+    [value
+     (or (string->number value) value)]))
+
+(define (numerize-points lst)
+  (match lst
+    [() '()]
+    [(((a . b) . label) . rest)
+     (numerize `((,a . ,b) . ,rest))]
+    [(value . rest)
+     `(,(numerize value) . ,(numerize rest))]
+    [value
+     (or (string->number value) value)]))
 
 ;; adjust the text
 (define (adjust-text point-lst canvas)
@@ -25,7 +46,7 @@
                (points point-lst)]
       (match points
         [() (reverse rects)]
-        ;; ignore fixed rects for now
+        ;; ignore fixed rects
         [(((x . y) . (:fixed . some)) . rest)
          (loop rects rest)]
         [(((x . y) . label) . rest)
@@ -44,42 +65,6 @@
            [strange (error "Strange rect" strange)])
          rects))
 
-  ;; IMPORTANT: overlap? assumes that rects is up-to-date
-  ;; this means that rects should be updated with each iteration
-  (define (overlap? rect)
-    (match-let
-        [(((rect-x . rect-y) . (rect-w . rect-h)) rect)]
-      (and
-       ;; check with the points
-       (let loop [(points point-lst)]
-         (match points
-           [() #t]
-           [(((x . y) . label) . rest)
-            (let [(closest-x (max rect-x (min x (+ rect-x rect-w))))
-                  (closest-y (max rect-y (min y (+ rect-y rect-h))))]
-              (if (>= (sqrt (abs (- (expt (- closest-x x) 2)
-                                    (expt (- closest-y y) 2))))
-                      3)
-                  (loop rest)
-                  #f))]
-           [strange (error "Strange point" strange)]))
-       ;; check with other rects
-       (let loop [(rect-lst rects)]
-         (match rect-lst
-           [() #t]
-           [(((x . y) . (w . h)) . rest)
-            ;; is it our rect?
-            (if (equal? `((,x . ,y) . (,w . ,h)) rect)
-                (loop rest)
-                ;; not our rect!
-                (if (not (or (<= (+ rect-x rect-w) x)
-                             (>= rect-x (+ x w))
-                             (<= (+ rect-y rect-h) y)
-                             (>= rect-y (+ y h))))
-                    (loop rest)
-                    #f))]
-           [strange (error "Strange rect" strange)])))))
-
   (define (repel rect point points)
     (let [(cw (string->number (car canvas)))
           (ch (string->number (cdr canvas)))]
@@ -90,7 +75,7 @@
 
           ;; (define (point-repel pt force) force)
           (define (point-repel pt force)
-            ;; (format #t "Point repel with force ~a~%" force)
+            ;; (format #t "Point repel with force ~a and point ~a~%" force pt)
             (let* [(vx (car pt))
                    (vy (cdr pt))
                    (fx (car force))
@@ -123,7 +108,7 @@
                           . ,(+ fy
                                 (* ovy 10 (if (< y oy) 1 -1))))
                         force)))))
-
+          
           ;; (define (boundary-repel force) force)
           (define (boundary-repel force)
             ;; (format #t "Boundary repel with force ~a~%" force)
@@ -146,8 +131,12 @@
           (let* [(force
                   (boundary-repel
                    (fold rect-repel
-                         (fold point-repel `(0 . 0) points)
-                         rects)))]
+                         (fold rect-repel
+                               (fold point-repel
+                                     (fold point-repel `(0 . 0) points)
+                                     (numerize-points points-with-fixed-rects))
+                               rects)
+                         (numerize fixed-rects))))]
             ;; (format #t "Force: ~a~%" force)
             (match-let [((fx . fy) force)]
               (let [(nx (max 0 (min (+ x (* learn-rate fx)) (- cw w))))
@@ -235,8 +224,7 @@
                       "' fill='black' font-family='monospace'>"
                       label
                       "</text>")))
-                 ;; TEMPORARY removal of fixed points
-                 ;; points
+                 ;; non-fixed points
                  (let loop [(points-clean '())
                             (pts points)]
                    (match pts
@@ -245,8 +233,77 @@
                       (loop points-clean rest)]
                      [(other . rest)
                       (loop (cons other points-clean) rest)]))
-                 (adjust-text points canvas))))]
-    (string-append header definitions body footer)))
+                 (adjust-text points canvas))))
+        (body-fixed
+         (apply string-append
+                (map
+                 (lambda (point rect)
+                   (match-let
+                       [(((x . y) . label) point)
+                        (((ax . ay) . (aw . ah)) rect)]
+                     (string-append
+                      ;; circle
+                      "<circle cx='" x
+                      "' cy='" y
+                      "' r='" (number->string radius)
+                      "' fill='blue'/>"
+                      ;; arrow
+                      "<line x1='" x
+                      "' y1='" y
+                      "' x2='" ax
+                      "' y2='" ay
+                      "' stroke='black' stroke-width='1' marker-end='url(#arrowhead)' />"
+                      ;; label
+                      "<text x='" ax
+                      "' y='" ay
+                      "' font-size='" (number->string font-size)
+                      "' fill='black' font-family='monospace'>"
+                      label
+                      "</text>")))
+                 points-with-fixed-rects
+                 fixed-rects)))]
+    (string-append header definitions body body-fixed footer)))
+
+;; prepare variables for fixed points
+(define (fixed-point-parser point-lst)
+  (set! fixed-rects
+    (let loop [(fixed-rects '())
+               (points point-lst)]
+      (match points
+        [() (reverse fixed-rects)]
+        [(((x . y) . (:fixed label (fixed-x . fixed-y))) . rest)
+         (loop (cons `((,fixed-x . ,fixed-y) .
+                       (,(number->string (* (string-length label))) . ,(number->string font-size)))
+                     fixed-rects)
+               rest)]
+        [(((x . y) . label) . rest)
+         (loop fixed-rects rest)]
+        [strange (error "Strange input to fixed-point-parser" strange)])))
+
+  (set! points-with-fixed-rects
+    (let loop [(points-with-fixed-rects '())
+               (points point-lst)]
+      (match points
+        [() (reverse points-with-fixed-rects)]
+        [(((x . y) . (:fixed label . some)) . rest)
+         (loop (cons `((,x . ,y) . ,label)
+                     points-with-fixed-rects)
+               rest)]
+        [(((x . y) . label) . rest)
+         (loop points-with-fixed-rects rest)]
+        [strange (error "Strange input to fixed-point-parser" strange)])))
+  
+  (set! points
+    (let loop [(points-without-fixed-rects '())
+               (points point-lst)]
+      (match points
+        [() (reverse points-without-fixed-rects)]
+        [(((x . y) . (:fixed . some)) . rest)
+         (loop points-without-fixed-rects rest)]
+        [(some . rest)
+         (loop (cons some points-without-fixed-rects)
+               rest)]
+        [strange (error "Strange input to fixed-point-parser" strange)]))))
 
 ;; get inputs
 (define parse-inputs
@@ -279,5 +336,7 @@
     [strange (error "Malformed Arguments: " strange)]))
 
 (parse-inputs (command-line))
+
+(fixed-point-parser points)
 
 (format #t "~a~%" (create-svg points canvas))

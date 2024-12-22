@@ -1,0 +1,7 @@
+#+TITLE:repel.scm
+A Guile Scheme text adjustment program inspired by [[https://github.com/Phlya/adjustText][adjustText]] and [[https://github.com/slowkow/ggrepel][ggrepel]]
+[[./output.svg]]
+* Example Usage
+#+BEGIN_SRC shell
+  cat args | sed 's/\n/ /' | xargs ./repel.scm > output.svg
+#+END_SRC
